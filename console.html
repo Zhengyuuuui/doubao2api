@@ -269,15 +269,21 @@ pre{background:#0d131a;border:1px solid var(--line);border-radius:10px;padding:1
       </div>
     </section>
 
-    <!-- 多模态（laoin 浏览器后端，需 Playwright 登录） -->
+    <!-- 多模态（laoin 浏览器后端，默认不启动，手动开启） -->
     <section id="v-multimodal" style="display:none">
       <div class="panel">
-        <div class="panel-h">多模态状态 <span class="tag" id="mm-state">检测中…</span>
-          <span class="mono">登录 /admin 扫码（浏览器后端）</span></div>
-        <div class="panel-b mono" style="line-height:1.9">
-          · 多模态能力走 <b>laoin 浏览器后端</b>（Playwright 自动签名），与号池网关（纯 HTTP）相互独立<br>
-          · 首次使用需在 <a href="/admin" target="_blank">/admin</a> 页用豆包 App 扫码登录浏览器<br>
-          · 若浏览器未启动/未登录，下方操作会返回 503
+        <div class="panel-h">网页反代（多模态后端）<span class="tag" id="mm-state">未开启</span></div>
+        <div class="panel-b">
+          <div class="row">
+            <button id="mm-btn-start" onclick="mmBrowserStart()">开启网页反代</button>
+            <button id="mm-btn-stop" class="ghost" style="display:none" onclick="mmBrowserStop()">关闭网页反代</button>
+            <span class="mono">默认不启动 Chromium，点击「开启」后才拉起浏览器</span>
+          </div>
+          <div class="mono" style="margin-top:10px;line-height:1.9">
+            · 开启后浏览器窗口会弹出（有头模式），去 <a href="/admin" target="_blank">/admin</a> 用豆包 App 扫码登录<br>
+            · 多模态能力走 <b>laoin 浏览器后端</b>（Playwright 自动签名），与号池网关（纯 HTTP）相互独立<br>
+            · 若浏览器未登录，下方操作会返回 503
+          </div>
         </div>
       </div>
       <div class="panel">
@@ -615,13 +621,34 @@ async function mmFetch(path,opt){
   return d;
 }
 async function loadMMState(){
-  const el=$('#mm-state');
   try{
-    const d=await mmFetch('/health');
-    if(d.logged_in){el.textContent='浏览器已登录';}
-    else if(d.needs_captcha){el.textContent='需要验证码';}
-    else{el.textContent='浏览器未登录（去 /admin 扫码）';}
-  }catch(e){el.textContent='后端不可用';}
+    const d=await mmFetch('/admin/browser/status');
+    const st=$('#mm-state'), b1=$('#mm-btn-start'), b2=$('#mm-btn-stop');
+    if(d.running){
+      b1.style.display='none'; b2.style.display='';
+      if(d.logged_in){st.textContent='已开启 · 已登录';}
+      else if(d.needs_captcha){st.textContent='已开启 · 需验证码';}
+      else{st.textContent='已开启 · 未登录（去 /admin 扫码）';}
+    }else{
+      b1.style.display=''; b2.style.display='none';
+      st.textContent='未开启';
+    }
+  }catch(e){$('#mm-state').textContent='状态不可用';}
+}
+async function mmBrowserStart(){
+  const btn=$('#mm-btn-start'); btn.disabled=true; btn.textContent='启动中…';
+  try{
+    const d=await mmFetch('/admin/browser/start',{method:'POST'});
+    if(d.ok){toast(d.logged_in?'网页反代已开启（浏览器已登录）':'网页反代已开启（去 /admin 扫码）');}
+    else{toast('启动失败: '+(d.error||'未知'),true);}
+  }catch(e){toast('启动失败: '+e.message,true);}
+  btn.disabled=false; btn.textContent='开启网页反代';
+  loadMMState();
+}
+async function mmBrowserStop(){
+  try{await mmFetch('/admin/browser/stop',{method:'POST'});toast('网页反代已关闭');}
+  catch(e){toast('关闭失败: '+e.message,true);}
+  loadMMState();
 }
 function mmShow(id,data){
   const el=$(id); el.style.display=''; el.textContent=typeof data==='string'?data:JSON.stringify(data,null,2);

@@ -406,6 +406,7 @@ def create_app(
     _qianwen: Dict[str, Any] = {}  # holds QianwenClient instance
     # Recovery state for the watchdog: avoid restart loops on an expired login.
     _recovery: Dict[str, Any] = {"attempts": 0, "last": 0.0}
+    _watchdog: Dict[str, Any] = {"task": None}
 
     async def _browser_watchdog():
         """Background task: check browser health every 30s, auto-restart on crash.
@@ -453,35 +454,47 @@ def create_app(
             except Exception as e:
                 log.error("Browser watchdog error: %s", e)
 
+    def _stop_watchdog():
+        task = _watchdog.get("task")
+        if task:
+            task.cancel()
+            _watchdog["task"] = None
+
+    async def _start_browser():
+        """启动浏览器（网页反代后端）。返回 (client, error)。"""
+        existing = _browser.get("client")
+        if existing is not None and existing.is_ready:
+            return existing, None
+        headless = os.environ.get("DOUBAO_HEADLESS", "false").lower() == "true"
+        user_data_dir = os.environ.get(
+            "DOUBAO_BROWSER_DATA",
+            os.path.join(os.path.expanduser("~"), ".doubao_browser"),
+        )
+        client = BrowserClient(headless=headless, user_data_dir=user_data_dir)
+        try:
+            await client.start()
+        except Exception as e:
+            log.error("浏览器启动失败（网页反代不可用，号池网关不受影响）: %s", e)
+            return None, str(e)
+        _browser["client"] = client
+        if client.is_ready:
+            log.info("Browser client ready (already logged in)")
+        else:
+            log.warning("Browser not logged in. Visit /admin to scan QR code.")
+        if _watchdog["task"] is None:
+            _watchdog["task"] = asyncio.create_task(_browser_watchdog())
+        return client, None
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         # Ensure browser_client logs are visible
         logging.getLogger("doubao2api.browser_client").setLevel(logging.INFO)
         logging.getLogger("doubao2api.browser_client").addHandler(logging.StreamHandler())
 
-        # Start browser client
-        headless = os.environ.get("DOUBAO_HEADLESS", "true").lower() == "true"
-        user_data_dir = os.environ.get(
-            "DOUBAO_BROWSER_DATA",
-            os.path.join(os.path.expanduser("~"), ".doubao_browser"),
-        )
-        client = BrowserClient(headless=headless, user_data_dir=user_data_dir)
-        watchdog_task = None
-        try:
-            await client.start()
-            _browser["client"] = client
-        except Exception as e:
-            # 浏览器启动失败（如未安装 Chromium）不应拖垮号池网关：
-            # 多模态/生成/文件端点返回 503，号池/密钥/签到/控制台照常可用。
-            log.error("浏览器启动失败，多模态/生成/文件/工具/千问端点不可用（号池网关不受影响）: %s", e)
-            _browser["client"] = None
-        else:
-            if client.is_ready:
-                log.info("Browser client ready (already logged in)")
-            else:
-                log.warning("Browser not logged in. Visit /auth to scan QR code.")
-            # Start browser watchdog
-            watchdog_task = asyncio.create_task(_browser_watchdog())
+        # 网页反代（浏览器）默认不启动，除非显式设置 DOUBAO_AUTO_START_BROWSER=true
+        _browser["client"] = None
+        if os.environ.get("DOUBAO_AUTO_START_BROWSER", "false").lower() == "true":
+            await _start_browser()
 
         # Start Qianwen client (optional, enabled via env var)
         qw_client = None
@@ -503,8 +516,7 @@ def create_app(
         yield
 
         # Shutdown
-        if watchdog_task:
-            watchdog_task.cancel()
+        _stop_watchdog()
         client = _browser.pop("client", None)
         if client:
             await client.stop()
@@ -776,6 +788,32 @@ def create_app(
         return response
 
     # ── Endpoints ──
+
+    # 网页反代（浏览器）运行时开关：默认不启动，console 里点击开启
+    @app.post("/admin/browser/start")
+    async def browser_start(request: Request):
+        _check_auth(request)
+        c, err = await _start_browser()
+        if err:
+            return {"ok": False, "error": err[:200]}
+        return {"ok": True, "logged_in": c.is_ready, "needs_captcha": c.needs_captcha}
+
+    @app.post("/admin/browser/stop")
+    async def browser_stop(request: Request):
+        _check_auth(request)
+        _stop_watchdog()
+        client = _browser.pop("client", None)
+        if client:
+            await client.stop()
+        return {"ok": True}
+
+    @app.get("/admin/browser/status")
+    async def browser_status(request: Request):
+        _check_auth(request)
+        client = _browser.get("client")
+        if client is None:
+            return {"running": False, "logged_in": False}
+        return {"running": True, "logged_in": client.is_ready, "needs_captcha": client.needs_captcha}
 
     @app.get("/health")
     async def health():
