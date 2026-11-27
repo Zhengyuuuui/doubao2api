@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 运行时敏感产物（含 Cookie / 密钥，切勿提交）
+config.json
+accounts.json
+keys.json
+usage.jsonl
+*.jsonl
+.env
+
+# 浏览器登录态
+.doubao_browser/
+.qianwen_browser/
+
+# 系统
+.DS_Store

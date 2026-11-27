@@ -1,0 +1,12 @@
+# doubao2api bridge 依赖（号池网关 + laoin 多模态后端）
+aiohttp>=3.9
+fastapi>=0.100
+httpx>=0.25
+playwright>=1.40
+playwright-stealth>=1.0.3
+pydantic>=2.0
+python-multipart>=0.0.9
+uvicorn>=0.20
+
+# 可选：精确 token 计数（缺失时自动降级为字符估算）
+# tiktoken>=0.5
